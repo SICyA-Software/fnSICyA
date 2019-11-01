@@ -17,8 +17,8 @@ class ViewController: UIViewController {
         let fnS3 = fnSICyA()
         fnS3.initDBSQLite(strFileName: "TestDB")
         
-        let errorFoundSQLite = fnS3.executeQueryDBSQLite(pQuery: "select * from Usuarios")
-//
-//        print("Error Found in SQLite ", errorFoundSQLite)
+        let dataSQLite = fnS3.executeQueryResultDBSQLite(pQuery: "select * from Usuarios")
+        
+        print("Resultado: ", dataSQLite.count)
     }
 }

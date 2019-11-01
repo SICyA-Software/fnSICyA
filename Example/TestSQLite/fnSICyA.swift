@@ -5,14 +5,22 @@ import SQLite3
 class fnSICyA {
     let fm = FileManager.default
 
+    var activePrintLog: Bool
     var isInitDBSQLite: Bool
     var isOpenDBSQLite: Bool
     
     private var dbSQLite: OpaquePointer? = nil
     private var filePathSQLite: String? = nil
+    private var msgLog: String? = nil
     
     
     init() {
+        #if DEBUG
+        self.activePrintLog = true
+        #else
+        self.activePrintLog = false
+        #endif
+        
         self.isInitDBSQLite = false
         self.isOpenDBSQLite = false
     }
@@ -25,8 +33,8 @@ class fnSICyA {
     }
     
 
-    func saveLogError(_ pLog: String) {
-        let fileName = getDocumentsDirectory().appendingPathComponent("ErrorLog.txt")
+    func saveLogError(log pLog: String, printLog pActivePrint: Bool = false) {
+        let fileName = getDocumentsDirectory().appendingPathComponent("ErrorLog").appendingPathExtension("txt")
         let formatDate = DateFormatter()
         var strLog: String
 
@@ -56,7 +64,10 @@ class fnSICyA {
             }
         } catch (let error) {
             print("Error al grabar el Log. Error: \(error)")
-            // failed to write file – bad permissions, bad filename, missing permissions, or more likely it can't be converted to the encoding
+        }
+        
+        if pActivePrint {
+            print(pLog)
         }
     }
 
@@ -72,12 +83,10 @@ class fnSICyA {
             
             try fm.copyItem(atPath: originFile, toPath: pathFileName)
         } catch (let error) {
-            let dataLog = "NO se pudo copiar el archivo \(fileName) a la carpeta \(pathFileName). Error: \(error)"
-
             pathFileName = ""
-            saveLogError(dataLog)
-            print("str: ", dataLog)
-            print("NO se pudo copiar el archivo \(fileName) a la carpeta \(pathFileName). Error: \(error)")
+            self.msgLog = "NO se pudo copiar el archivo \(fileName) a la carpeta \(pathFileName). Error: \(error)"
+
+            saveLogError(log: self.msgLog!, printLog: self.activePrintLog)
         }
         
         return pathFileName
@@ -87,21 +96,20 @@ class fnSICyA {
     func initDBSQLite(strFileName dbFileName: String) {
         let originalDBFile = Bundle.main.path(forResource: dbFileName, ofType: "db") ?? ""
         let fileName = dbFileName + "App.db"
-        
-        self.isInitDBSQLite = true
-        
+
         if fm.fileExists(atPath: originalDBFile) {
             let dbFilePath = copyFileIntoDocumentsDirectory(pathOriginFile: originalDBFile, strFileName: fileName)
             
             if dbFilePath.isEmpty {
                 self.isInitDBSQLite = false
-                print("Error al inicializar la DBSQLite")
+                saveLogError(log: "Error al inicializar la DB SQLite", printLog: self.activePrintLog)
             } else {
+                self.isInitDBSQLite = true
                 self.filePathSQLite = dbFilePath
             }
         } else {
             self.isInitDBSQLite = false
-            print("NO existe el archivo de la base de datos original")
+            saveLogError(log: "NO existe el archivo de la base de datos original!", printLog: self.activePrintLog)
         }
     }
     
@@ -111,67 +119,154 @@ class fnSICyA {
         
         if self.isInitDBSQLite {
             if self.isOpenDBSQLite {
-                errorSQLite = sqlite3_close(dbSQLite)
+                errorSQLite = sqlite3_close(self.dbSQLite)
                 
-                print("Valor SQL Close ", errorSQLite)
                 if errorSQLite == SQLITE_OK {
                     self.isOpenDBSQLite = false
-                    dbSQLite = nil
+                    self.dbSQLite = nil
+                } else {
+                    self.msgLog = "NO se pudo cerrar la base de datos. Error:\(errorSQLite) - \(String(cString: sqlite3_errmsg(self.dbSQLite)))"
+                    
+                    saveLogError(log: self.msgLog!, printLog: self.activePrintLog)
                 }
             }
 
-            errorSQLite = sqlite3_open(filePathSQLite, &dbSQLite)
+            errorSQLite = sqlite3_open(self.filePathSQLite, &dbSQLite)
             if errorSQLite == SQLITE_OK {
                 self.isOpenDBSQLite = true
             } else {
-                print("NO se pudo abrir la base de datos \(filePathSQLite ?? "N/A") SQLite. Error: \(errorSQLite)", String(cString: sqlite3_errmsg(dbSQLite)))
+                self.msgLog = "NO se pudo abrir la base de datos \(self.filePathSQLite!) SQLite. Error: \(errorSQLite) - \(String(cString: sqlite3_errmsg(dbSQLite)))"
+                
+                saveLogError(log: self.msgLog!, printLog: self.activePrintLog)
             }
         } else {
-            print("La base de datos SQLite no ha sido iniciada")
+            saveLogError(log: "La base de datos SQLite no ha sido inicializada.", printLog: self.activePrintLog)
         }
     }
     
     
     func executeQueryDBSQLite(pQuery sqlQuery: String) -> Bool {
         var queryStatement: OpaquePointer? = nil
-        var errorSQLite: Int32
-        var errorFound = false
+        var returnCodeSQLite: Int32
+        var errorFound: Bool
         
         if !isOpenDBSQLite {
             self.openDBSQLite()
         }
         
         if isOpenDBSQLite {
-            errorSQLite = sqlite3_prepare_v2(dbSQLite, sqlQuery, -1, &queryStatement, nil)
-
-            if errorSQLite == SQLITE_OK {
-                errorSQLite = sqlite3_step(queryStatement)
-                if errorSQLite == SQLITE_DONE {
+            returnCodeSQLite = sqlite3_prepare_v2(dbSQLite, sqlQuery, -1, &queryStatement, nil)
+            if returnCodeSQLite == SQLITE_OK {
+                returnCodeSQLite = sqlite3_step(queryStatement)
+                if returnCodeSQLite == SQLITE_DONE {
+                    errorFound = false
                     print("El comando fue ejecutado!")
                 } else {
-                    let errorLog = "El comando NO se pudo ejecutar. Error:\(errorSQLite) - \(String(cString: sqlite3_errmsg(dbSQLite)))"
-                    saveLogError(errorLog)
-                    print("El comando NO se pudo ejecutar. Error: \(errorSQLite) - ", String(cString: sqlite3_errmsg(dbSQLite)))
+                    errorFound = true
+                    self.msgLog = "El comando NO se pudo ejecutar. Error:\(returnCodeSQLite) - \(String(cString: sqlite3_errmsg(dbSQLite)))"
+                    
+                    saveLogError(log: self.msgLog!, printLog: self.activePrintLog)
+                }
+                
+                returnCodeSQLite = sqlite3_finalize(queryStatement)
+                if returnCodeSQLite != SQLITE_OK {
+                    self.msgLog = "NO se pudo resetear la instruccion. Error: \(returnCodeSQLite) - \(String(cString: sqlite3_errmsg(dbSQLite)))"
+
+                    saveLogError(log: self.msgLog!, printLog: self.activePrintLog)
                 }
             } else {
-                print("El comando \"\(sqlQuery)\" no esta preparado. Error: \(errorSQLite) - ", String(cString: sqlite3_errmsg(dbSQLite)))
+                errorFound = true
+                saveLogError(log: "El comando \"\(returnCodeSQLite)\" no esta preparado. Error: \(returnCodeSQLite) - \(String(cString: sqlite3_errmsg(dbSQLite)))", printLog: self.activePrintLog)
+            }
+            
+            returnCodeSQLite = sqlite3_close(dbSQLite)
+            if returnCodeSQLite != SQLITE_OK {
+                self.msgLog = "NO se pudo cerrar la base de datos. Error:\(returnCodeSQLite) - \(String(cString: sqlite3_errmsg(self.dbSQLite)))"
+                saveLogError(log: self.msgLog!, printLog: self.activePrintLog)
             }
         } else {
             errorFound = true
-            print("La base de datos NO esta abierta")
+            saveLogError(log: "La base de datos NO esta abierta", printLog: self.activePrintLog)
         }
-        
-        sqlite3_reset(queryStatement)
-        sqlite3_close(dbSQLite)
         
         return errorFound
     }
     
     
     func executeQueryResultDBSQLite(pQuery sqlQuery: String) -> [AnyHashable] {
-        var arrDataRow: [AnyHashable] = []
+        var queryStatement: OpaquePointer? = nil
+        var arrData = [AnyHashable]()
+        var arrRow: [AnyHashable] = []
+        var returnCodeSQLite: Int32
         
-        return arrDataRow
+        if !isOpenDBSQLite {
+            self.openDBSQLite()
+        }
+        
+        if isOpenDBSQLite {
+            returnCodeSQLite = sqlite3_prepare_v2(dbSQLite, sqlQuery, -1, &queryStatement, nil)
+            if returnCodeSQLite == SQLITE_OK {
+                while sqlite3_step(queryStatement) == SQLITE_ROW {
+                    arrRow = [AnyHashable]()
+                    let totalColumns = sqlite3_column_count(queryStatement)
+                
+                    for i in 0..<totalColumns {
+                        var dbDataAsChars: String
+                        var dbDataAsInt: Int32
+                        var dbDataAsInt64: Int64
+                        var dbDataAsFloat: Double
+
+                        switch sqlite3_column_bytes(queryStatement, i) {
+                        case SQLITE_TEXT:
+                            dbDataAsChars = String(cString: sqlite3_column_text(queryStatement, i))
+                            arrRow.append(dbDataAsChars)
+                        case  SQLITE_INTEGER:
+                            dbDataAsInt = sqlite3_column_int(queryStatement, i)
+                            arrRow.append(dbDataAsInt)
+                        case SQLITE_INTEGER:
+                            dbDataAsInt64 = sqlite3_column_int64(queryStatement, i)
+                            arrRow.append(dbDataAsInt64)
+                        case SQLITE_FLOAT:
+                            dbDataAsFloat = sqlite3_column_double(queryStatement, i)
+                            arrRow.append(dbDataAsFloat)
+                        default:
+                            dbDataAsChars = String(cString: sqlite3_column_text(queryStatement, i))
+                            arrRow.append(dbDataAsChars)
+                        }
+
+//                        if arrColumnsName.count != totalColumns {
+//                            dbDataAsChars = Int8(sqlite3_column_name(queryStatement, i))
+//                            arrColumnsName.append(String(utf8String: dbDataAsChars) ?? "")
+//                        }
+                    }
+
+                    if arrRow.count > 0 {
+                        arrData.append(arrRow)
+                    }
+                }
+
+                returnCodeSQLite = sqlite3_finalize(queryStatement)
+                if returnCodeSQLite != SQLITE_OK {
+                    self.msgLog = "NO se pudo resetear la instruccion. Error: \(returnCodeSQLite) - \(String(cString: sqlite3_errmsg(dbSQLite)))"
+                    saveLogError(log: self.msgLog!, printLog: self.activePrintLog)
+                }
+            } else {
+                arrData.removeAll()
+
+                saveLogError(log: "El comando \"\(returnCodeSQLite)\" no esta preparado. Error: \(returnCodeSQLite) - \(String(cString: sqlite3_errmsg(dbSQLite)))", printLog: self.activePrintLog)
+            }
+            
+            returnCodeSQLite = sqlite3_close(dbSQLite)
+            if returnCodeSQLite != SQLITE_OK {
+                self.msgLog = "NO se pudo cerrar la base de datos. Error:\(returnCodeSQLite) - \(String(cString: sqlite3_errmsg(self.dbSQLite)))"
+                saveLogError(log: self.msgLog!, printLog: self.activePrintLog)
+            }
+        } else {
+            arrData.removeAll()
+            saveLogError(log: "La base de datos NO esta abierta", printLog: self.activePrintLog)
+        }
+        
+        return arrData
     }
 }
 
@@ -195,6 +290,18 @@ class fnSICyA {
 //func insertData() {
 //
 //}
+
+                
+//                while sqlite3_step(queryStatement) == SQLITE_ROW {
+//                    let id = sqlite3_column_int(queryStatement, 0)
+//                    let name = String(cString: sqlite3_column_text(queryStatement, 1))
+//                    let powerrank = sqlite3_column_int(queryStatement, 2)
+//
+//                    //adding values to list
+//                    heroList.append(Hero(id: Int(id), name: String(describing: name), powerRanking: Int(powerrank)))
+//                }
+
+
 
 //        Forma de buscar el path de un directorio con NSSearch
 //        let localPaths = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)

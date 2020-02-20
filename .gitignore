@@ -202,3 +202,4 @@ dmypy.json
 
 # Generales 
 .DS_Store
+log*.csv
